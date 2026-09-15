@@ -88,7 +88,10 @@ ONNXRUNTIME_DIR=/path/to/onnxruntime-linux-aarch64-1.14.0 bash cpp/build_ax650.s
 C++ 依赖的 aarch64 ORT 需 **glibc ≤ 板端版本**：用官方 **1.23.0** aarch64 包
 （GLIBC 2.17/2.27，实测可用；非官方高版本构建可能要求 GLIBC≥2.38）。
 运行时做跨帧流水线（主线程 Flow-AR+flow_net ∥ worker 线程 Mimi 解码），
-实测 AX650N：zh_short RTF 0.40、zh_long RTF 0.41、首帧 ~0.13s、CER 0%。
+并把 AR 图每层的注意力（Transpose/Split/mask 链/Softmax）重写为单个 opset-23
+`Attention` 算子（578→422 节点，`python/fuse_attention.py`，fp32 逐位一致），
+实测 AX650N：zh_short RTF ≈0.39、zh_long RTF ≈0.39~0.43（随板端负载波动）、
+首帧 ~0.13s、CER 0%。
 
 ## 目录
 
