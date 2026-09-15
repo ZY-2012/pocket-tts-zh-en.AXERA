@@ -64,12 +64,37 @@ python python/roundtrip_cer.py --wavs out.wav --text "..."   # 回环 CER（需 
 bash scripts/board_run.sh "你好，世界。" out.wav
 ```
 
+
+## C++ 运行时（可选，交叉编译）
+
+源码在 `cpp/`（aarch64 ONNX Runtime + axengine，rust-free 单一可执行文件）。
+文本分词在主机侧完成（与 Python 前端逐位一致），生成 request 文件后 C++ 只做推理。
+
+```bash
+# 主机：生成 request（每行一个分块的 token ids）
+export POCKET_TTS_ROOT=/path/to/pocket-tts-zh-en
+python python/prepare_tokens.py --spm $POCKET_TTS_ROOT/chn_jpn_yue_eng_ko_spectok.bpe.model \
+  --text "你好，世界。" --out request.tokens
+
+# 交叉编译（工具链/BSP/ORT 路径可用环境变量覆盖）
+TOOLCHAIN_ROOT=/path/to/gcc-arm-9.2-aarch64 BSP_MSP_DIR=/path/to/ax650n_bsp_sdk/msp/out \
+ONNXRUNTIME_DIR=/path/to/onnxruntime-linux-aarch64-1.14.0 bash cpp/build_ax650.sh
+
+# 板端：把 cpp/bin/ 与 HF 包的 models/ 拷到板端本地后运行
+./bin/pocket_tts_zh_en --models-dir models --reference models/Vivian.wav \
+  --tokens-file request.tokens --output out.wav --threads 4 --prefill-threads 8
+```
+
+C++ 依赖的 aarch64 ORT 需 **glibc ≤ 板端版本**（实测 1.14.0 官方包 GLIBC_2.17 可用；
+1.21.1 的非官方构建要求 GLIBC_2.38 在 Ubuntu 22.04 板端无法加载）。
+
 ## 目录
 
 ```
 configs/     # 金标准/试听文本集
 python/      # 拆图、补丁、静态化、int8、校准、Pulsar2 配置、验证、CER 脚本
 board/       # AX650 运行时（axengine + onnxruntime）与批量驱动
+cpp/         # C++ 运行时（交叉编译，ORT + axengine 混合）
 scripts/     # ax650 量化脚本、板端一键脚本
 docs/        # 各阶段报告与指标（M0/M1/M2-M3/M5-M7）
 ```
