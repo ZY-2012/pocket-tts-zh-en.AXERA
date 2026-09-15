@@ -1,0 +1,122 @@
+{
+  "board": "AX650N root@10.126.29.50",
+  "date": "2026-09-15",
+  "config": {
+    "flow_prefill": "ORT CPU fp32, threads=8, flow_step_windowed.onnx, window=512",
+    "flow_ar": "ORT CPU int8, threads=4, flow_ar_step_int8.onnx",
+    "flow_net": "NPU FP32 axmodel",
+    "mimi_transformer": "ORT CPU fp32",
+    "mimi_conv": "NPU U16 axmodel",
+    "mimi_encoder": "ORT CPU fp32",
+    "voice_prefix_cache": true,
+    "chunking": "punctuation + <=48 tokens"
+  },
+  "runs": [
+    {
+      "tag": "zh_short",
+      "tokens": 18,
+      "audio_s": 3.52,
+      "total_s": 4.37,
+      "rtf": 1.24,
+      "cer_board": 0.0,
+      "cer_fp32_golden": 0.0,
+      "pcm_cos": 0.519
+    },
+    {
+      "tag": "zh_notice",
+      "tokens": 45,
+      "audio_s": 8.24,
+      "total_s": 8.24,
+      "rtf": 1.0,
+      "cer_board": 7.14,
+      "cer_fp32_golden": 4.76,
+      "pcm_cos": 0.208
+    },
+    {
+      "tag": "zh_long",
+      "tokens": 93,
+      "chunks": 3,
+      "audio_s": 18.08,
+      "total_s": 15.99,
+      "rtf": 0.885,
+      "cer_board": 0.0,
+      "cer_fp32_golden": 0.0,
+      "pcm_cos": 0.052
+    },
+    {
+      "tag": "en_short",
+      "tokens": 12,
+      "audio_s": 3.52,
+      "total_s": 4.3,
+      "rtf": 1.221,
+      "cer_board": 0.0,
+      "cer_fp32_golden": 0.0,
+      "pcm_cos": 0.432
+    },
+    {
+      "tag": "mix_short",
+      "tokens": 29,
+      "audio_s": 5.36,
+      "total_s": 5.82,
+      "rtf": 1.085,
+      "cer_board": 4.0,
+      "cer_fp32_golden": 10.0,
+      "pcm_cos": 0.197
+    }
+  ],
+  "stage_ms_mean_per_frame": {
+    "flow_ar_int8": 29.8,
+    "mimi_transformer": 21.5,
+    "flow_net_npu": 1.8,
+    "mimi_conv_npu": 1.9
+  },
+  "first_frame_breakdown_ms": {
+    "mimi_encode": 1270,
+    "voice_prefill": 330,
+    "text_prefill": 80,
+    "note": "voice prefix cached across chunks"
+  },
+  "notes": [
+    "PCM cos vs fp32 golden is not a valid acceptance metric: any NPU-in-loop config diverges; round-trip CER stays at the ASR floor",
+    "zh_notice CER floor (brand name) is 4.76% on the fp32 reference",
+    "listening test by a human still recommended"
+  ],
+  "presets_note": "arint8 / arfp32 differ only in the flow-LM AR step graph (int8 75.7MB vs fp32 302MB); RTF differs, CER identical (ASR floor)",
+  "arpf32_preset": {
+    "flow_ar": "fp32 lean",
+    "rtf": {
+      "zh_notice": 1.362,
+      "zh_long": 1.242,
+      "en_short": 1.567
+    }
+  },
+  "final_config_m5_m7": {
+    "flow_prefill": "ORT int8 (flow_step_int8.onnx, 101.5MB)",
+    "flow_ar": "ORT int8 lean (flow_ar_step_int8.onnx, 75.7MB)",
+    "flow_net": "NPU FP32 axmodel",
+    "mimi_transformer": "ORT int8 (mimi_transformer_step_int8.onnx, 6.6MB)",
+    "mimi_conv": "NPU U16 axmodel",
+    "mimi_encoder": "NPU static tier 40f (step_encoder_40f.axmodel)",
+    "encoder_window_policy": "tail window when truncating, left pad when shorter",
+    "text_frontend": "punctuation + numbers_to_zh + sentence/clause/hard chunking + 120ms pause",
+    "streaming": "--stream flag (placeholder RIFF header)",
+    "threads": {
+      "ar": 4,
+      "prefill": 8
+    }
+  },
+  "listen_pack": {
+    "dir": "results/audio/listen_pack",
+    "items": 11,
+    "mean_rtf": 0.6647,
+    "mean_first_frame_ms": 167.1,
+    "load_s": 4.21,
+    "cer_table": "results/audio/listen_pack/CER.tsv"
+  },
+  "stage_ms_mean_per_frame_final": {
+    "flow_ar_int8": 30.8,
+    "mimi_transformer_int8": 15.9,
+    "flow_net_npu": 2.6,
+    "mimi_conv_npu": 2.1
+  }
+}

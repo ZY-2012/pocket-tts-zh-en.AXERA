@@ -1,0 +1,20 @@
+{
+  "seed": 0,
+  "temperature": 0.0,
+  "max_frames": 375,
+  "threads": 4,
+  "reference": "Vivian.wav",
+  "texts": [
+    {"tag": "zh_short", "text": "今天天气不错，我们一起去公园散步吧。"},
+    {"tag": "zh_notice", "text": "欢迎使用图灵云语音合成服务!我们提供高质量的中文语音合成技术，支持多种音色和语音参数调节。"},
+    {"tag": "zh_long", "text": "人工智能正在改变我们的生活方式。从智能手机到自动驾驶汽车，从语音助手到机器翻译，这些技术都在不断提升我们的工作效率。未来，随着算力的增长和算法的进步，我们将会看到更多令人惊叹的应用场景。"},
+    {"tag": "en_short", "text": "The train arrived before sunset, and the station became quiet."},
+    {"tag": "mix_short", "text": "我们用 Pocket TTS 生成一段中英混合语音，support both Chinese and English."},
+    {"tag": "zh_tongue", "text": "四是四，十是十，十四是十四，四十是四十。"},
+    {"tag": "zh_homophone", "text": "石室诗士施氏，嗜狮，誓食十狮。"},
+    {"tag": "zh_number", "text": "订单号是2026年3月15日，单价128元，共3件。"},
+    {"tag": "zh_brand", "text": "图灵云、微信、支付宝和淘宝都是常用的应用。"},
+    {"tag": "en_long", "text": "Autumn arrived early that year, and the narrow streets were covered with leaves as the old clock tower struck six in the evening."},
+    {"tag": "mix_long", "text": "欢迎体验我们的语音合成 Demo，它支持 voice cloning 和 bilingual synthesis，效果怎么样？"}
+  ]
+}

@@ -1,0 +1,14 @@
+# generated artifacts / large files
+models/
+model_convert/
+results/
+.work_tmp/
+*.onnx
+*.axmodel
+*.wav
+*.npy
+*.tar.gz
+build-*/
+*.log
+__pycache__/
+*.pyc
