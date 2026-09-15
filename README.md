@@ -85,8 +85,10 @@ ONNXRUNTIME_DIR=/path/to/onnxruntime-linux-aarch64-1.14.0 bash cpp/build_ax650.s
   --tokens-file request.tokens --output out.wav --threads 4 --prefill-threads 8
 ```
 
-C++ 依赖的 aarch64 ORT 需 **glibc ≤ 板端版本**（实测 1.14.0 官方包 GLIBC_2.17 可用；
-1.21.1 的非官方构建要求 GLIBC_2.38 在 Ubuntu 22.04 板端无法加载）。
+C++ 依赖的 aarch64 ORT 需 **glibc ≤ 板端版本**：用官方 **1.23.0** aarch64 包
+（GLIBC 2.17/2.27，实测可用；非官方高版本构建可能要求 GLIBC≥2.38）。
+运行时做跨帧流水线（主线程 Flow-AR+flow_net ∥ worker 线程 Mimi 解码），
+实测 AX650N：zh_short RTF 0.40、zh_long RTF 0.41、首帧 ~0.13s、CER 0%。
 
 ## 目录
 

@@ -17,6 +17,8 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <future>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <sstream>
@@ -66,7 +68,7 @@ struct Cache {
     void truncate(size_t rows) { length = rows; data.resize(rows * row); }
 };
 
-struct OrtGraph {
+struct TtsSession {
     Ort::Env env{ORT_LOGGING_LEVEL_ERROR, "pocket-tts-zh-en"};
     std::unique_ptr<Ort::Session> session;
     std::vector<std::string> input_names;
@@ -219,6 +221,7 @@ struct Options {
     std::string output;
     int threads = 4;
     int prefill_threads = 8;
+    int mimi_threads = 0;  // 0 -> threads
     int max_frames = 375;
     float temp = 0.0f;
     int seed = 0;
@@ -239,6 +242,7 @@ int main(int argc, char** argv) {
         else if (a == "--output") opt.output = next();
         else if (a == "--threads") opt.threads = std::stoi(next());
         else if (a == "--prefill-threads") opt.prefill_threads = std::stoi(next());
+        else if (a == "--mimi-threads") opt.mimi_threads = std::stoi(next());
         else if (a == "--max-frames") opt.max_frames = std::stoi(next());
         else if (a == "--temp") opt.temp = std::stof(next());
         else if (a == "--seed") opt.seed = std::stoi(next());
@@ -262,10 +266,11 @@ int main(int argc, char** argv) {
 
     const std::string md = opt.models_dir;
     const auto t_load0 = Clock::now();
-    OrtGraph flow, flow_ar, mimi_tf;
+    TtsSession flow, flow_ar, mimi_tf;
     flow.load(md + "/flow_step_int8.onnx", opt.prefill_threads);
     flow_ar.load(md + "/flow_ar_step_int8.onnx", opt.threads);
-    mimi_tf.load(md + "/mimi_split/mimi_transformer_step_int8.onnx", opt.threads);
+    mimi_tf.load(md + "/mimi_split/mimi_transformer_step_int8.onnx",
+                 opt.mimi_threads > 0 ? opt.mimi_threads : opt.threads);
 
     EngineWrapper enc, flow_net, mimi_conv;
     if (enc.Init((md + "/encoder/step_encoder_40f.axmodel").c_str()) != 0)
@@ -393,7 +398,6 @@ int main(int argc, char** argv) {
             flow_kv.append(out[2].GetTensorData<float>(), seq);
         }
 
-        std::vector<float> latent(kLatentDim, 0.f);
         std::vector<float> is_bos{1.f};
         Cache mimi_kv;
         mimi_kv.row = kMimiRow;
@@ -401,18 +405,73 @@ int main(int argc, char** argv) {
         std::vector<float> mimi_conv_state(kConvState, 0.f);
         int64_t mimi_offset = 0;
 
-        for (int frame = 0; frame < opt.max_frames; ++frame) {
-            const auto t_frame = Clock::now();
-            std::vector<float> noise(kLatentDim, 0.f);
+        // persistent buffers (worker thread owns the mimi ones until join)
+        std::vector<float> noise(kLatentDim, 0.f);
+        std::vector<float> mkv_window(size_t(kMimiKvLen) * kMimiRow, 0.f);
+        std::vector<float> decoder_embedding(512 * 16);
+        std::vector<float> upsample_state(kUpsampleState);
+        std::mutex npu_mutex;
+
+        struct MimiResult {
+            std::vector<float> audio;
+            bool emit = false;
+        };
+
+        // worker: mimi transformer (ORT int8) + mimi conv (NPU U16)
+        auto run_mimi = [&](std::vector<float> input_latent, bool emit) -> MimiResult {
+            size_t mkv_len = std::min<size_t>(mimi_kv.length, kMimiKvLen);
+            std::fill(mkv_window.begin(), mkv_window.end(), 0.f);
+            if (mkv_len > 0) {
+                std::copy(mimi_kv.data.end() - mkv_len * kMimiRow, mimi_kv.data.end(),
+                          mkv_window.end() - mkv_len * kMimiRow);
+            }
+            auto latent2_t = tensor_f32({1, 1, kLatentDim}, input_latent.data());
+            auto mkv_t = tensor_f32({kMimiKvLen, kMimiLayers, 2, 1, kMimiHeads, kMimiHeadDim},
+                                    mkv_window.data());
+            auto mconv_t = tensor_f32({kConvState}, mimi_conv_state.data());
+            auto moff_t = tensor_i64({}, &mimi_offset);
+            std::vector<Ort::Value> tf_feed;
+            tf_feed.push_back(std::move(latent2_t));
+            tf_feed.push_back(std::move(mkv_t));
+            tf_feed.push_back(std::move(mconv_t));
+            tf_feed.push_back(std::move(moff_t));
+            auto tf_out = mimi_tf.run(tf_feed);
+            std::copy(tf_out[0].GetTensorData<float>(),
+                      tf_out[0].GetTensorData<float>() + decoder_embedding.size(),
+                      decoder_embedding.data());
+            std::copy(tf_out[2].GetTensorData<float>(),
+                      tf_out[2].GetTensorData<float>() + upsample_state.size(),
+                      upsample_state.data());
+            mimi_kv.append(tf_out[1].GetTensorData<float>(), kStepsPerLatent);
+            {
+                std::lock_guard<std::mutex> lock(npu_mutex);
+                if (mimi_conv.SetInputByName("decoder_embedding", decoder_embedding.data()) != 0 ||
+                    mimi_conv.SetInputByName("mimi_conv", mimi_conv_state.data()) != 0 ||
+                    mimi_conv.SetInputByName("upsample_state", upsample_state.data()) != 0 ||
+                    mimi_conv.RunSync() != 0)
+                    throw std::runtime_error("mimi_conv run failed");
+                mimi_conv.GetOutputByName("audio", audio_buf.data());
+                mimi_conv.GetOutputByName("mimi_conv_out", mimi_conv_state.data());
+            }
+            mimi_offset += kStepsPerLatent;
+            MimiResult res;
+            res.audio.assign(audio_buf.begin(), audio_buf.end());
+            res.emit = emit;
+            return res;
+        };
+
+        // main: flow AR step + flow_net -> next latent; returns eos logit
+        std::vector<float> latent(kLatentDim, 0.f);
+        auto ar_flownet = [&](const float* in_latent, std::vector<float>& out_latent) -> float {
             if (opt.temp > 0.f) {
                 for (auto& v : noise) v = normal(rng) * std::sqrt(opt.temp);
+            } else {
+                std::fill(noise.begin(), noise.end(), 0.f);
             }
-
-            // flow AR
             size_t win = flow_kv.length > kFlowWindow ? kFlowWindow : flow_kv.length;
             const float* kv_ptr = flow_kv.data.data() + (flow_kv.length - win) * kFlowRow;
             int64_t offset = static_cast<int64_t>(flow_kv.length);
-            auto latent_t = tensor_f32({1, 1, kLatentDim}, latent.data());
+            auto latent_t = tensor_f32({1, 1, kLatentDim}, const_cast<float*>(in_latent));
             auto bos_t = tensor_f32({1, 1, 1}, is_bos.data());
             auto kv_t = tensor_f32({static_cast<int64_t>(win), kFlowLayers, 2, 1,
                                     kFlowHeads, kFlowHeadDim}, const_cast<float*>(kv_ptr));
@@ -426,62 +485,54 @@ int main(int argc, char** argv) {
             const float* conditioning = out[0].GetTensorData<float>();
             const float eos_logit = out[1].GetTensorData<float>()[0];
             flow_kv.append(out[2].GetTensorData<float>(), 1);
-
-            // flow net (NPU FP32)
-            if (flow_net.SetInputByName("conditioning", conditioning) != 0 ||
-                flow_net.SetInputByName("noise", noise.data()) != 0 || flow_net.RunSync() != 0)
-                throw std::runtime_error("flow_net run failed");
-            std::vector<float> next_latent(kLatentDim);
-            flow_net.GetOutputByName("next_latent", next_latent.data());
-
-            // mimi transformer (ORT int8)
-            size_t mkv_len = std::min<size_t>(mimi_kv.length, kMimiKvLen);
-            std::vector<float> mkv_window(size_t(kMimiKvLen) * kMimiRow, 0.f);
-            if (mkv_len > 0) {
-                std::copy(mimi_kv.data.end() - mkv_len * kMimiRow, mimi_kv.data.end(),
-                          mkv_window.end() - mkv_len * kMimiRow);
+            {
+                std::lock_guard<std::mutex> lock(npu_mutex);
+                if (flow_net.SetInputByName("conditioning", conditioning) != 0 ||
+                    flow_net.SetInputByName("noise", noise.data()) != 0 ||
+                    flow_net.RunSync() != 0)
+                    throw std::runtime_error("flow_net run failed");
+                flow_net.GetOutputByName("next_latent", out_latent.data());
             }
-            std::vector<int64_t> next_shape{1, 1, kLatentDim};
-            auto latent2_t = tensor_f32(next_shape, next_latent.data());
-            auto mkv_t = tensor_f32({kMimiKvLen, kMimiLayers, 2, 1, kMimiHeads, kMimiHeadDim},
-                                    mkv_window.data());
-            auto mconv_t = tensor_f32({kConvState}, mimi_conv_state.data());
-            auto moff_t = tensor_i64({}, &mimi_offset);
-            std::vector<Ort::Value> tf_feed;
-            tf_feed.push_back(std::move(latent2_t));
-            tf_feed.push_back(std::move(mkv_t));
-            tf_feed.push_back(std::move(mconv_t));
-            tf_feed.push_back(std::move(moff_t));
-            auto tf_out = mimi_tf.run(tf_feed);
-            std::vector<float> decoder_embedding(512 * 16);
-            std::vector<float> upsample_state(kUpsampleState);
-            std::copy(tf_out[0].GetTensorData<float>(),
-                      tf_out[0].GetTensorData<float>() + decoder_embedding.size(),
-                      decoder_embedding.data());
-            std::copy(tf_out[2].GetTensorData<float>(),
-                      tf_out[2].GetTensorData<float>() + upsample_state.size(),
-                      upsample_state.data());
-            mimi_kv.append(tf_out[1].GetTensorData<float>(), kStepsPerLatent);
+            return eos_logit;
+        };
 
-            // mimi conv (NPU U16)
-            if (mimi_conv.SetInputByName("decoder_embedding", decoder_embedding.data()) != 0 ||
-                mimi_conv.SetInputByName("mimi_conv", mimi_conv_state.data()) != 0 ||
-                mimi_conv.SetInputByName("upsample_state", upsample_state.data()) != 0 ||
-                mimi_conv.RunSync() != 0)
-                throw std::runtime_error("mimi_conv run failed");
-            mimi_conv.GetOutputByName("audio", audio_buf.data());
-            mimi_conv.GetOutputByName("mimi_conv_out", mimi_conv_state.data());
-            mimi_offset += kStepsPerLatent;
+        // pipelined loop: frame n's mimi decode overlaps frame n+1's AR + flow_net
+        const auto t_loop = Clock::now();
+        std::vector<float> zero_latent(kLatentDim, 0.f);
+        std::vector<float> next_latent(kLatentDim, 0.f);
+        const float eos0 = ar_flownet(zero_latent.data(), next_latent);
+        is_bos[0] = 0.f;
+        bool stopped = eos0 > kEosThreshold;
+        auto pending = std::async(std::launch::async, run_mimi, next_latent, !stopped);
+        bool have_pending = true;
+        latent = next_latent;
+        for (int frame = 1; !stopped && frame < opt.max_frames; ++frame) {
+            const float eos_n = ar_flownet(latent.data(), next_latent);
             latent = next_latent;
-            is_bos[0] = 0.f;
-            const double frame_ms = ms_since(t_frame);
-            if (first_frame_ms < 0) first_frame_ms = ms_since(chunk_start);
-            total_ms += frame_ms;
-            if (eos_logit > kEosThreshold) break;
-            frames_total += 1;
-            samples_total += kFrameSize;
-            writer.write(audio_buf.data(), kFrameSize);
+            MimiResult res = pending.get();
+            have_pending = false;
+            if (res.emit) {
+                if (first_frame_ms < 0) first_frame_ms = ms_since(chunk_start);
+                frames_total += 1;
+                samples_total += kFrameSize;
+                writer.write(res.audio.data(), kFrameSize);
+            }
+            stopped = eos_n > kEosThreshold;
+            if (!stopped) {
+                pending = std::async(std::launch::async, run_mimi, next_latent, true);
+                have_pending = true;
+            }
         }
+        if (have_pending) {
+            MimiResult res = pending.get();
+            if (!stopped && res.emit) {
+                if (first_frame_ms < 0) first_frame_ms = ms_since(chunk_start);
+                frames_total += 1;
+                samples_total += kFrameSize;
+                writer.write(res.audio.data(), kFrameSize);
+            }
+        }
+        total_ms += ms_since(t_loop);
         if (ci + 1 < chunks.size() && pause_samples > 0) {
             writer.write(silence.data(), silence.size());
             samples_total += pause_samples;
