@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "engine_wrapper.hpp"
+#include "ax_sys_api.h"
 #include "onnxruntime_cxx_api.h"
 
 namespace {
@@ -255,6 +256,9 @@ int main(int argc, char** argv) {
                      "[--max-frames 375] [--temp 0] [--pause-ms 120] [--stream 1]\n";
         return 2;
     }
+    if (AX_SYS_Init() != 0) throw std::runtime_error("AX_SYS_Init failed");
+    AX_ENGINE_NPU_ATTR_T npu_attr{};
+    if (AX_ENGINE_Init(&npu_attr) != 0) throw std::runtime_error("AX_ENGINE_Init failed");
 
     const std::string md = opt.models_dir;
     const auto t_load0 = Clock::now();
@@ -270,7 +274,6 @@ int main(int argc, char** argv) {
         throw std::runtime_error("failed to load flow_net axmodel");
     if (mimi_conv.Init((md + "/mimi_conv_step.axmodel").c_str()) != 0)
         throw std::runtime_error("failed to load mimi_conv axmodel");
-
     auto ref = read_ref_wav(opt.reference);
     auto chunks = read_request(opt.tokens_file);
     std::printf("load %.1fms, reference %.2fs, chunks %zu\n", ms_since(t_load0),
@@ -306,9 +309,11 @@ int main(int argc, char** argv) {
     } else {
         std::copy(ref.begin(), ref.end(), clip.begin() + (tier_samples - ref.size()));
     }
-    if (enc.SetInputByName("audio", clip.data()) != 0 || enc.RunSync() != 0)
-        throw std::runtime_error("encoder run failed");
+    if (enc.SetInputByName("audio", clip.data()) != 0)
+        throw std::runtime_error("encoder set input failed");
+    if (enc.RunSync() != 0) throw std::runtime_error("encoder run failed");
     const int cond_bytes = enc.GetOutputSizeByName("cond");
+    if (cond_bytes <= 0) throw std::runtime_error("bad cond output");
     const int cond_frames = cond_bytes / (kModelDim * 4);
     std::vector<float> cond(cond_bytes / 4);
     enc.GetOutputByName("cond", cond.data());
@@ -406,24 +411,15 @@ int main(int argc, char** argv) {
             // flow AR
             size_t win = flow_kv.length > kFlowWindow ? kFlowWindow : flow_kv.length;
             const float* kv_ptr = flow_kv.data.data() + (flow_kv.length - win) * kFlowRow;
-            std::vector<int64_t> tokens0(1, 0);
-            std::vector<float> cond_zero(kModelDim, 0.f);
-            std::vector<float> gates_ar{0.f, 1.f, 0.f};
             int64_t offset = static_cast<int64_t>(flow_kv.length);
             auto latent_t = tensor_f32({1, 1, kLatentDim}, latent.data());
             auto bos_t = tensor_f32({1, 1, 1}, is_bos.data());
-            auto tokens_t = tensor_i64({1, 1}, tokens0.data());
-            auto cond0_t = tensor_f32({1, 1, kModelDim}, cond_zero.data());
-            auto gates_t = tensor_f32({3}, gates_ar.data());
             auto kv_t = tensor_f32({static_cast<int64_t>(win), kFlowLayers, 2, 1,
                                     kFlowHeads, kFlowHeadDim}, const_cast<float*>(kv_ptr));
             auto off_t = tensor_i64({}, &offset);
             std::vector<Ort::Value> feed;
-            feed.push_back(std::move(tokens_t));
             feed.push_back(std::move(latent_t));
             feed.push_back(std::move(bos_t));
-            feed.push_back(std::move(cond0_t));
-            feed.push_back(std::move(gates_t));
             feed.push_back(std::move(kv_t));
             feed.push_back(std::move(off_t));
             auto out = flow_ar.run(feed);
@@ -496,5 +492,7 @@ int main(int argc, char** argv) {
     std::printf("frames=%ld audio=%.2fs first_frame=%.1fms total=%.2fs RTF=%.4f\n",
                 frames_total, audio_s, first_frame_ms, total_ms / 1000.0,
                 total_ms / 1000.0 / audio_s);
+    AX_ENGINE_Deinit();
+    AX_SYS_Deinit();
     return 0;
 }
