@@ -118,5 +118,60 @@
     "mimi_transformer_int8": 15.9,
     "flow_net_npu": 2.6,
     "mimi_conv_npu": 2.1
+  },
+  "benchmark": {
+    "repo": "ZY-2012/Voice_Test.AXERA @ 6766551",
+    "reference": "Vivian.wav",
+    "runs": {
+      "aishell3_zh_200": {
+        "metric": "cer_loopback",
+        "value": 8.4647,
+        "gt_floor": 2.9046,
+        "rtf": 0.7373,
+        "success": 100.0,
+        "len_ratio": 0.5483
+      },
+      "ljspeech_en_200": {
+        "metric": "wer_loopback",
+        "value": 7.8367,
+        "rtf": 0.7085,
+        "success": 100.0,
+        "len_ratio": 0.8442
+      },
+      "zh_long_zh_40": {
+        "metric": "cer_loopback",
+        "value": 0.6767,
+        "rtf": 0.6987,
+        "success": 100.0
+      },
+      "zh_hardcase_zh_150": {
+        "metric": "cer_loopback",
+        "value": 2.4635,
+        "rtf": 0.7193,
+        "success": 100.0
+      }
+    }
+  },
+  "cpp_runtime": {
+    "binary": "cpp/bin/pocket_tts_zh_en (aarch64, ORT 1.14)",
+    "zh_short": {
+      "frames": 45,
+      "audio_s": 3.6,
+      "first_frame_ms": 130,
+      "rtf": 0.7294,
+      "cer": 0.0
+    },
+    "zh_long": {
+      "frames": 224,
+      "audio_s": 18.16,
+      "first_frame_ms": 150,
+      "rtf": 0.8077,
+      "cer": 0.0
+    }
+  },
+  "repos": {
+    "github": "https://github.com/ZY-2012/pocket-tts-zh-en.AXERA",
+    "huggingface": "https://huggingface.co/HY-2012/pocket-tts-zh-en.AXERA",
+    "benchmark": "https://github.com/ZY-2012/Voice_Test.AXERA"
   }
 }
