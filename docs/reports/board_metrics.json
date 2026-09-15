@@ -153,21 +153,27 @@
     }
   },
   "cpp_runtime": {
-    "binary": "cpp/bin/pocket_tts_zh_en (aarch64, ORT 1.14)",
+    "binary": "cpp/bin/pocket_tts_zh_en (aarch64, ORT 1.23.0, pipelined)",
+    "threads": {
+      "ar": 5,
+      "mimi": 2,
+      "prefill": 8
+    },
     "zh_short": {
       "frames": 45,
       "audio_s": 3.6,
       "first_frame_ms": 130,
-      "rtf": 0.7294,
+      "rtf": 0.395,
       "cer": 0.0
     },
     "zh_long": {
       "frames": 224,
       "audio_s": 18.16,
-      "first_frame_ms": 150,
-      "rtf": 0.8077,
+      "first_frame_ms": 130,
+      "rtf": 0.407,
       "cer": 0.0
-    }
+    },
+    "speedup_vs_python": "1.6-1.8x (python: zh_short 0.73, zh_long 0.674)"
   },
   "repos": {
     "github": "https://github.com/ZY-2012/pocket-tts-zh-en.AXERA",

@@ -27,22 +27,25 @@ HF 包板端独立验证（复制到板端本地后 `bash run_ax650.sh`）：RTF
 ## 3. C++ 运行时
 
 - 位置：GitHub `cpp/`（源码 + 交叉编译脚本）；HF 包 `cpp/bin/`（aarch64 预编译）
+- 运行时：**ORT 1.23.0**（官方 aarch64，GLIBC 2.17/2.27）+ **跨帧流水线**（主线程 Flow-AR + flow_net ∥ worker 线程 Mimi transformer + Mimi conv，NPU 访问互斥），AR=5 线程 / mimi=2 线程
 - 结构：aarch64 ONNX Runtime（官方 1.14，GLIBC_2.17 兼容）+ axengine（AX_SYS/AX_ENGINE Init），同一混合管线；流式 WAV（占位头回填）
 - 文本：主机侧 `tools/prepare_tokens.py` 生成 token 请求文件（与 Python 前端一致）
 
 | 用例 | 帧数 | 时长 | 首帧 | 总耗时 | RTF | 回环 CER |
 |---|---:|---:|---:|---:|---:|---:|
-| zh_short | 45 | 3.60s | 0.13s | 2.63s | 0.7294 | 0.00% |
-| zh_long（3 块） | 224 | 18.16s | 0.15s | 14.67s | 0.8077 | 0.00% |
+| zh_short | 45 | 3.60s | 0.13~0.14s | 1.42~1.52s | **0.395~0.423** | 0.00% |
+| zh_long（3 块） | 224 | 18.16s | 0.13s | 7.40s | **0.407** | 0.00% |
 
-与 Python 同配置基本持平（Python zh_short 0.72~0.80 / zh_long 0.67）；C++ 的价值在免 Python/conda 环境与进程内流式。
+加速过程：ORT 1.14 → 1.23（int8 算子，RTF 0.73/0.81 → 0.59/0.60）→ 跨帧流水线 + 线程配比（→ 0.40/0.41）。
+**比 Python 版快 1.6~1.8 倍**（Python：zh_short 0.73、zh_long 0.674），且保持 CER 0%。
 
 ### 踩坑记录（已修）
 
 1. 缺少 `AX_SYS_Init` / `AX_ENGINE_Init` → axmodel 加载失败
 2. 精简 AR 图只有 4 个输入（latent/is_bos/flow_kv/flow_offset），误按整图 7 入参构造 → 段错误
 3. ORT 版本：非官方 1.21.1 aarch64 构建要求 GLIBC_2.38（板端 2.35 无法加载）；改用官方 1.14.0
-4. HF 仓库：`.so` 需 LFS 跟踪、符号链接会被 pre-receive 拒绝（改实体文件）
+4. HF 仓库：`.so`/可执行文件需 LFS 跟踪（`*.so*`、`cpp/bin/*`），符号链接会被 pre-receive 拒绝（改实体文件）
+5. ORT 1.23 头文件里存在 `OrtGraph` 类型，与自定义结构重名 → 编译期改名 `TtsSession`
 
 ## 4. 复现
 
