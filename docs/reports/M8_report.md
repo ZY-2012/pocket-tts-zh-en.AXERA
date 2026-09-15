@@ -64,3 +64,20 @@ TTS_MODELS=pocket_tts_zh_en TTS_DATASETS="aishell3 ljspeech zh_long zh_hardcase"
 - benchmark：`Voice_Test.AXERA/results/tts.csv`（模型行 + GT 锚点行）+ README 自动表
 - C++：`cpp/pocket_tts_zh_en.cpp`、`cpp/build_ax650.sh`、`cpp/bin/`、`python/prepare_tokens.py`
 - 对比音频：`results/audio/cpp_zh_short.wav`、`cpp_zh_long.wav`（与 `board_arint8_*` 成对可听）
+
+
+## C++ 加速第二轮（RTF 0.41 → 0.39，累计较 Python 快 ~1.7x）
+
+| 手段 | 效果 |
+|---|---|
+| ORT 1.14 → **1.23**（官方 aarch64，GLIBC 2.17/2.27） | RTF 0.73/0.81 → 0.59/0.60 |
+| **跨帧流水线**：主线程 Flow-AR+flow_net ∥ worker Mimi 解码（NPU 互斥） | → 0.40/0.41 |
+| **注意力融合**：每层 Transpose/Split/mask 链/Softmax → 单个 opset-23 `Attention`（578→422 节点，fp32 逐位一致） | AR 32.8→29.0ms，RTF **~0.39** |
+| 线程配比 AR=5 / mimi=2、关闭每帧 flush | 边际收益 |
+
+**被否决的尝试**：静态 QDQ 量化 AR（节点更多，AR 39ms 更慢）；ORT 1.26（比 1.23 慢 3~4%）；
+单纯加线程（6/8 线程反而退化，板端争抢）。
+
+**当前瓶颈画像**（ORT profiler）：AR 关键路径 ~29ms，其中 DynamicQuantizeMatMul 26%、Transpose/Split/Concat/Squeeze/Squeeze 等布局小算子 ~44%（每帧 ~420 节点调度开销主导）。
+worker 的 mimi_tf ~23ms 已被流水线隐藏。板端 CPU 锁定 1.7GHz 满频；他人负载（load 14~18）会造成 ±10% 波动。
+进一步方向：RoPE 融合（`com.microsoft::RotaryEmbedding`，预计再省 2~3ms）、以及把 6 层整体融合（工作量大）。
