@@ -123,7 +123,7 @@ docs/        # 各阶段报告与指标（M0/M1/M2-M3/M5-M7）
 - 本仓代码：Apache License 2.0。
 - 声音克隆请确保已获得被克隆者授权。
 
-## 参考与感谢
+## 参考 & 感谢
 
 - **原工程**：[Pocket-TTS 中英双语社区版（图灵云）](https://www.tulingyun.com/tts_clone.html) —— 模型权重与融合 ONNX 导出件来源，本项目全程基于其 ONNX 做图手术（无 PyTorch 源码）
 - **上游架构**：[kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) —— CALM / Lagrangian Self Distillation
